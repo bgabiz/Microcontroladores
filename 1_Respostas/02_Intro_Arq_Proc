@@ -2,7 +2,7 @@
 
 O barramento de dados, contém os dados da entrada do programa, o de endereço, são onde os dados são armazenados.
 
-2. Quais são as diferenças entre as memórias RAM e ROM?
+2. Quais são as diferenças entre as memórias RAM e ROM? 
 
 A memória RAM, reseta quando acaba a energia, diferente da ROM, que precisa de métodos menos simples para ser apagada, dependendo do tipo
 de memória ROM.
