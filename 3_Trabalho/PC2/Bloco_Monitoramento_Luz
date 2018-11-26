@@ -1,0 +1,17 @@
+// Lê o sinal do diodo, converte em tensão e mostra o resultado em um monitor serial.
+
+void setup() {
+  Serial.begin(9600);
+}
+
+void loop() {
+  // Lê a entrada
+  int sensorValue = analogRead(7);
+  delay(1);
+  // Converte de 0 - 1023 para algo entre 0 - 5V
+  float voltage = sensorValue * (5.0 / 1023.0);
+  if (sensorValue > 500) {
+    // Mostra o valor
+    Serial.println(sensorValue);
+  }
+}
