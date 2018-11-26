@@ -1,0 +1,165 @@
+#include <msp430g2553.h>
+#include <legacymsp430.h>
+
+#define IN_AD BIT1
+#define IN_AD_CH INCH_1
+#define LED1 BIT0
+#define LED2 BIT6
+#define LEDS (LED1|LED2)
+#define Nv 10
+
+unsigned int v[Nv];
+int iv=0;
+
+int main(void)
+{
+    WDTCTL = WDTPW + WDTHOLD;
+
+    BCSCTL1 = CALBC1_1MHZ;
+    DCOCTL = CALDCO_1MHZ;
+
+    P1OUT &= ~LEDS;
+    P1DIR |= LEDS;
+
+    // Configura o canal 1 do Timer A em modo de comparacao
+    // com periodo de 0,5 segundos
+    TACCR0 = 6250-1;
+    TACCR1 = TACCR0/2;
+    TACCTL1 = OUTMOD_7;
+    TACTL = TASSEL_2 | ID_3 | MC_1;
+
+    ADC10CTL0 = SREF_0 + ADC10SHT_0 + ADC10ON + ADC10IE;
+    ADC10AE0 = IN_AD;
+    // Com SHS_1, uma conversao sera requisitada
+    // sempre que o canal 1 do Timer_A terminar sua contagem
+    ADC10CTL1 = IN_AD_CH + SHS_1 + ADC10DIV_0 + ADC10SSEL_3 + CONSEQ_2;
+    ADC10CTL0 |= ENC;
+
+    _BIS_SR(LPM0_bits+GIE);
+    return 0;
+}
+
+interrupt(ADC10_VECTOR) ADC10_ISR(void)
+{
+    unsigned int media = 0;
+    int cnt;
+    v[iv] = ADC10MEM;
+    iv++;
+    if(iv==Nv)
+        iv=0;
+    for(cnt=0; cnt<Nv; cnt++)
+        media += v[cnt];
+    media += Nv/2;
+    media /= Nv;
+    // Acende ou apaga o LED1
+    // de acordo com a leitura AD
+    if(media < 490)
+        P1OUT &= ~LED1;
+    else
+        P1OUT |= LED1;
+
+    // Inverte o LED2 para vermos
+    // a temporizacao da chamada
+    // a esta interrupcao
+    P1OUT ^= LED2;
+}
+
+
+Biblioteca legacymsp430.h
+
+#if !defined(__LEGACYMSP430_H_)
+#define __LEGACYMSP430_H_
+
+#include <iomacros.h>
+#include <msp430.h>
+#define INTERRUPT_VECTOR_SLOTS (1+(RESET_VECTOR / 2))
+
+#if !defined(__ASSEMBLER__)
+
+#ifndef BV
+#define BV(x) (1 << (x))
+#endif
+
+#define Interrupt(x) void __attribute__((interrupt (x)))
+#define INTERRUPT(x) void __attribute__((interrupt (x)))
+#define interrupt(x) void __attribute__((interrupt (x)))
+
+#define wakeup  __attribute__((wakeup))
+#define Wakeup  __attribute__((wakeup))
+#define WAKEUP  __attribute__((wakeup))
+
+#define enablenested    __attribute__((signal))
+#define EnableNested    __attribute__((signal))
+#define ENABLENESTED    __attribute__((signal))
+
+#include <in430.h>
+
+/* Enable/Disable interrupts */
+#define eint()  __eint()
+#define dint()  __dint()
+
+/* IAR compatibility functions */
+#define _EINT()                 eint()
+#define _DINT()                 dint()
+
+#define INTERRUPT_VECTORS \
+    void *InterruptVectors[INTERRUPT_VECTOR_SLOTS] __attribute__ ((section(".vectors")))
+
+/* Declare interrupt service routine with no interrupt vector assigned.
+ *  NB: Preferred way is to use __attribute__ ((interrupt)). */
+#define NOVECTOR        0xFF
+
+#define _RESET() void __attribute__ ((naked)) _reset_vector__(void)
+
+#define UNEXPECTED() interrupt (NOVECTOR) _unexpected_(void)
+
+#else   /*__ASSEMBLER__ / assember definitions*/
+
+/* Double macro trick to achieve that the x gets expanded*/
+#define interrupt(x) xinterrupt(x)
+#define xinterrupt(x) vector_##x: .global vector_##x
+
+#endif /* __ASSEMBLER__ */
+
+#endif /* __LEGACYMSP430_H_ */
+
+
+Biblioteca iomacros.h
+
+#ifndef IOMACROS_H_
+#define IOMACROS_H_
+
+#if defined(__ASSEMBLER__)
+
+#define sfrb(x,x_) x=x_
+#define sfrw(x,x_) x=x_
+#define sfra(x,x_) x=x_
+
+#define const_sfrb(x,x_) sfrb(x,x_)
+#define const_sfrw(x,x_) sfrw(x,x_)
+#define const_sfra(x,x_) sfra(x,x_)
+
+#else /* __ASSEMBLER__ */
+
+#define sfrb_(x,x_) volatile unsigned char x __asm__("__" #x)
+#define sfrb(x,x_) extern sfrb_(x,x_)
+
+#define sfrw_(x,x_) volatile unsigned int x __asm__("__" #x)
+#define sfrw(x,x_) extern sfrw_(x,x_)
+
+#define sfra_(x,x_) volatile unsigned long int x __asm__("__" #x)
+#define sfra(x,x_) extern sfra_(x,x_)
+
+#define const_sfrb(x,x_) extern const sfrb_(x,x_)
+#define const_sfrw(x,x_) extern const sfrw_(x,x_)
+#define const_sfra(x,x_) extern const sfra_(x,x_)
+
+#ifdef __GNUC__
+#define __interrupt __attribute__((__interrupt__))
+#endif /* __GNUC__ */
+
+#endif /* __ASSEMBLER__ */
+
+
+
+#endif /* IOMACROS_H_ */
