@@ -1,0 +1,17 @@
+
+int solo  = A5;// O pino A5, lê o sensor de umidade
+int rele = 4; // O pino digital 4 controla o Rele
+void setup() {
+  pinMode(solo,INPUT_PULLUP);// inicializa o pino do sensor como entrada.
+  pinMode(rele,OUTPUT);// inicializa o rele como saída.
+  Serial.begin(9600);//Abre a serial de saída
+}                                                                                                                                                                                                                                                                                                                                                                                                                       
+void loop() {
+  //Quanto menor a resistência do solo, maior a tensão de saída.
+  //Se AOut>2.5V,DOut=5V;se AOut<2.5V,DOut=0V;
+    int value=analogRead(solo);
+    Serial.println(value);//mostra o valor
+    if(value<900){//seta o valor 
+    digitalWrite(rele,HIGH);//liga o rele
+    }else digitalWrite(rele,LOW);//desliga o rele
+}
