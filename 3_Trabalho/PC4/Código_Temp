@@ -1,0 +1,363 @@
+#include "msp430g2553.h"
+#include "PCD8544.h"
+
+//********* Declaração de variáveis*********************************************************
+char temp[3];
+int tempbuff=0;
+unsigned char currXAddr = 0; //Variável que armazena a posição atual do cursor em X
+unsigned char currYAddr = 0; //Variável que armazena a posição atual do cursor em Y
+char setas[8] = {0x00, 0x18, 0x18, 0x18, 0x7E, 0x3C, 0x18, 0x00}; // Caracter Especial
+
+//********* Defines ************************************************************************
+#define LCD5110_SCLK_PIN BIT5       //Ligar CLK ao pino P1.5
+#define LCD5110_DN_PIN BIT7         //Ligar DIN ao pino P1.7
+#define LCD5110_SCE_PIN BIT0        //Ligar CE  ao pino P1.0
+#define LCD5110_DC_PIN BIT1         //Ligar D/C ao pino P1.1
+#define LCD5110_SELECT          P1OUT &= ~LCD5110_SCE_PIN   //LCD5110_SELECT = (0000 0000) & [NOT(0000 0001)] = 0000 000(0)
+#define LCD5110_DESELECT        P1OUT |= LCD5110_SCE_PIN    //LCD5110_DESELECT = (0000 0000) OR (0000 0001) = 0000 000(1)
+#define LCD5110_SET_COMMAND     P1OUT &= ~LCD5110_DC_PIN    //LCD5110_SET_COMMAND = (0000 0000) & [NOT(0000 0010)] = 0000 00(0)0
+#define LCD5110_SET_DATA        P1OUT |= LCD5110_DC_PIN     //LCD5110_SET_DATA = (0000 0000) OR (0000 0010)] = 0000 00(1)0
+#define LCD5110_COMMAND 0
+#define LCD5110_DATA 1
+#define SPI_MSB_FIRST UCB0CTL0 |= UCMSB     // USCI B0 Control Register 0 = Async. Mode: MSB first  0:LSB / 1:MSB
+#define SPI_LSB_FIRST UCB0CTL0 &= ~UCMSB    // USCI B0 Control Register 0 = Async. Mode: LSB first  1:LSB / 0:MSB
+
+//********* Configura convesor AD ************************************************************
+void tempInit(){
+    ADC10CTL0=SREF_1 + REFON + ADC10ON + ADC10SHT_3 ;   //1.5V ref,Ref em,64 clocks por amostragem
+    ADC10CTL1=INCH_10+ ADC10DIV_3;                      //temp sensor está em 10 e clock/4
+}
+
+//********* Realiza Amostragem e conversão ****************************************************
+int tempOut(){
+    int t=0;
+    __delay_cycles(1000);                           //Aguarda
+    ADC10CTL0 |= ENC + ADC10SC;                     //Habilita e inicia conversão
+    while(ADC10CTL1 & BUSY);                        //Aguarda enquanto não terminar conversão
+    t = ADC10MEM;                                   //salva valor em t
+    ADC10CTL0 &=~ENC;                               //Desabilita a conversão
+    return(int) ((t * 27069L - 18169625L) >> 16);   //Converte os valores e retorna
+}
+
+//********* Protótipos de Funções***************************************************************
+void writeStringToLCD(const char *string);
+void writeCharToLCD(char c);
+void writeBlockToLCD(char *byte, unsigned char length);
+void writeGraphicToLCD(char *byte, unsigned char transform);
+void writeToLCD(unsigned char dataCommand, unsigned char data);
+void clearLCD();
+void clearBank(unsigned char bank);
+void setAddr(unsigned char xAddr, unsigned char yAddr);
+void initLCD();
+
+//********* Função Principal ********************************************************************
+int main() {
+    WDTCTL = WDTPW + WDTHOLD;   // Desabilita o WDT
+    BCSCTL1 = CALBC1_1MHZ;      // 1MHz clock
+    DCOCTL = CALDCO_1MHZ;       // Controle de frequencia em 1MHz
+
+    P1OUT |= LCD5110_SCE_PIN + LCD5110_DC_PIN;
+    P1DIR |= LCD5110_SCE_PIN + LCD5110_DC_PIN;
+
+    // Configura o módulo USCI
+    P1SEL |= LCD5110_SCLK_PIN + LCD5110_DN_PIN;
+    P1SEL2 |= LCD5110_SCLK_PIN + LCD5110_DN_PIN;
+
+    UCB0CTL0 |= UCCKPH + UCMSB + UCMST + UCSYNC;    // 3-pin, 8-bit SPI master
+    UCB0CTL1 |= UCSSEL_2;                           // SMCLK
+    UCB0BR0 |= 0x01;                                // 1:1
+    UCB0BR1 = 0;
+    UCB0CTL1 &= ~UCSWRST;                           // Apaga SW
+
+    __delay_cycles(500000);
+    initLCD();          // Inicia LCD
+    clearLCD();         // Apaga o LCD
+    tempInit();         // Configura o AD
+    writeStringToLCD(" Amigo da horta 2000 ");
+    writeStringToLCD("--------------");
+    writeStringToLCD("Eletrônica Embarcada 2-2018 ");
+    setAddr(24, 5);
+    writeGraphicToLCD(setas, NONE);
+    writeGraphicToLCD(setas, FLIP_H);
+    writeGraphicToLCD(setas, ROTATE);
+    writeGraphicToLCD(setas, ROTATE_90_CCW);
+
+    // Loop Infinito
+    while(1){
+
+        clearBank(4);                   // Apaga a linha 4 do display
+        tempbuff = tempOut();           // Faz a Conversão no AD
+        temp[0]=((tempbuff/10)+'0');
+        temp[1]=((tempbuff%10)+'0');
+
+        writeStringToLCD(" Temperatura: ");
+        writeStringToLCD(temp);
+        writeCharToLCD(0x7f);           // Simbolo de graus
+        writeStringToLCD("C");
+
+        __delay_cycles(2000000);        // Aguarda 2s
+    }
+    return 0;
+}
+
+//********* Função para escrever uma String de caracters no Display *****************************
+void writeStringToLCD(const char *string) {
+    while(*string) {
+        writeCharToLCD(*string++);
+    }
+}
+
+//********* Função para escrever um caracter no Display ******************************************
+void writeCharToLCD(char c) {
+    unsigned char i;
+    for(i = 0; i < 5; i++) {
+        writeToLCD(LCD5110_DATA, font[c - 0x20][i]);
+    }
+    writeToLCD(LCD5110_DATA, 0);
+}
+
+//********* Função para escrever em uma linha inteira do LCD **************************************
+void writeBlockToLCD(char *byte, unsigned char length) {
+    unsigned char c = 0;
+    while(c < length) {
+        writeToLCD(LCD5110_DATA, *byte++);
+        c++;
+    }
+}
+
+//********* Função para desenhar imagens no LCD ****************************************************
+void writeGraphicToLCD(char *byte, unsigned char transform) {
+    int c = 0;
+    char block[8];
+    if(transform & FLIP_V) {
+        SPI_LSB_FIRST;
+    }
+    if(transform & ROTATE) {
+        c = 1;
+        while(c != 0) {
+            (*byte & 0x01) ? (block[7] |= c) : (block[7] &= ~c);
+            (*byte & 0x02) ? (block[6] |= c) : (block[6] &= ~c);
+            (*byte & 0x04) ? (block[5] |= c) : (block[5] &= ~c);
+            (*byte & 0x08) ? (block[4] |= c) : (block[4] &= ~c);
+            (*byte & 0x10) ? (block[3] |= c) : (block[3] &= ~c);
+            (*byte & 0x20) ? (block[2] |= c) : (block[2] &= ~c);
+            (*byte & 0x40) ? (block[1] |= c) : (block[1] &= ~c);
+            (*byte & 0x80) ? (block[0] |= c) : (block[0] &= ~c);
+            *byte++;
+            c <<= 1;
+        }
+    } else {
+        while(c < 8) {
+            block[c++] = *byte++;
+        }
+    }
+
+    if(transform & FLIP_H) {
+        c = 7;
+        while(c > -1) {
+            writeToLCD(LCD5110_DATA, block[c--]);
+        }
+    } else {
+        c = 0;
+        while(c < 8) {
+            writeToLCD(LCD5110_DATA, block[c++]);
+        }
+    }
+    SPI_MSB_FIRST;
+}
+
+
+//********* Função para enviar dados ou comando para LCD *******************************************
+void writeToLCD(unsigned char dataCommand, unsigned char data) {
+    LCD5110_SELECT;
+    if(dataCommand) {
+        LCD5110_SET_DATA;
+    } else {
+        LCD5110_SET_COMMAND;
+    }
+    UCB0TXBUF = data;
+    while(!(IFG2 & UCB0TXIFG));
+    LCD5110_DESELECT;
+}
+
+//********* Função apagar os dados no LCD LCD ******************************************************
+void clearLCD() {
+    setAddr(0, 0);
+    int c = 0;
+    while(c < PCD8544_MAXBYTES) {
+        writeToLCD(LCD5110_DATA, 0);
+        c++;
+    }
+    setAddr(0, 0);
+}
+
+//********* Função para apagar uma linha inteira do LCD ********************************************
+void clearBank(unsigned char bank) {
+    setAddr(0, bank);
+    int c = 0;
+    while(c < PCD8544_HPIXELS) {
+        writeToLCD(LCD5110_DATA, 0);
+        c++;
+    }
+    setAddr(0, bank);
+}
+
+//********* Função para apontar para um ponto exato no registrador da memoria do display*************
+void setAddr(unsigned char xAddr, unsigned char yAddr) {
+    writeToLCD(LCD5110_COMMAND, PCD8544_SETXADDR | xAddr);
+    writeToLCD(LCD5110_COMMAND, PCD8544_SETYADDR | yAddr);
+}
+
+//********* Função para iniciar o LCD ***************************************************************
+void initLCD() {
+    writeToLCD(LCD5110_COMMAND, PCD8544_FUNCTIONSET | PCD8544_EXTENDEDINSTRUCTION);
+    writeToLCD(LCD5110_COMMAND, PCD8544_SETVOP | 0x3F);
+    writeToLCD(LCD5110_COMMAND, PCD8544_SETTEMP | 0x02);
+    writeToLCD(LCD5110_COMMAND, PCD8544_SETBIAS | 0x03);
+    writeToLCD(LCD5110_COMMAND, PCD8544_FUNCTIONSET);
+    writeToLCD(LCD5110_COMMAND, PCD8544_DISPLAYCONTROL | PCD8544_DISPLAYNORMAL);
+}
+
+
+
+
+
+
+.h
+
+
+#ifndef PCD8544_H_
+#define PCD8544_H_
+
+#define PCD8544_POWERDOWN 0x04
+#define PCD8544_ENTRYMODE 0x02
+#define PCD8544_EXTENDEDINSTRUCTION 0x01
+
+#define PCD8544_DISPLAYBLANK 0x0
+#define PCD8544_DISPLAYNORMAL 0x4
+#define PCD8544_DISPLAYALLON 0x1
+#define PCD8544_DISPLAYINVERTED 0x5
+
+// H = 0
+#define PCD8544_FUNCTIONSET 0x20
+#define PCD8544_DISPLAYCONTROL 0x08
+#define PCD8544_SETYADDR 0x40
+#define PCD8544_SETXADDR 0x80
+#define PCD8544_HPIXELS 84
+#define PCD8544_VBANKS 6
+#define PCD8544_MAXBYTES 504 // PCD8544_HPIXELS * PCD8544_VBANKS
+
+// H = 1
+#define PCD8544_SETTEMP 0x04
+#define PCD8544_SETBIAS 0x10
+#define PCD8544_SETVOP 0xBF
+
+//transform
+#define NONE 0x00
+#define FLIP_H 0x01
+#define FLIP_V 0x02
+#define ROTATE 0x04 // 90 deg CW
+#define ROTATE_90_CW ROTATE
+#define ROTATE_90_CCW (FLIP_H | FLIP_V | ROTATE)
+#define ROTATE_180 (FLIP_H | FLIP_V)
+
+static const char font[][5] = { // basic font
+{0x00, 0x00, 0x00, 0x00, 0x00} // 20
+,{0x00, 0x00, 0x5f, 0x00, 0x00} // 21 !
+,{0x00, 0x07, 0x00, 0x07, 0x00} // 22 "
+,{0x14, 0x7f, 0x14, 0x7f, 0x14} // 23 #
+,{0x24, 0x2a, 0x7f, 0x2a, 0x12} // 24 $
+,{0x23, 0x13, 0x08, 0x64, 0x62} // 25 %
+,{0x36, 0x49, 0x55, 0x22, 0x50} // 26 &
+,{0x00, 0x05, 0x03, 0x00, 0x00} // 27 '
+,{0x00, 0x1c, 0x22, 0x41, 0x00} // 28 (
+,{0x00, 0x41, 0x22, 0x1c, 0x00} // 29 )
+,{0x14, 0x08, 0x3e, 0x08, 0x14} // 2a *
+,{0x08, 0x08, 0x3e, 0x08, 0x08} // 2b +
+,{0x00, 0x50, 0x30, 0x00, 0x00} // 2c ,
+,{0x08, 0x08, 0x08, 0x08, 0x08} // 2d -
+,{0x00, 0x60, 0x60, 0x00, 0x00} // 2e .
+,{0x20, 0x10, 0x08, 0x04, 0x02} // 2f /
+,{0x3e, 0x51, 0x49, 0x45, 0x3e} // 30 0
+,{0x00, 0x42, 0x7f, 0x40, 0x00} // 31 1
+,{0x42, 0x61, 0x51, 0x49, 0x46} // 32 2
+,{0x21, 0x41, 0x45, 0x4b, 0x31} // 33 3
+,{0x18, 0x14, 0x12, 0x7f, 0x10} // 34 4
+,{0x27, 0x45, 0x45, 0x45, 0x39} // 35 5
+,{0x3c, 0x4a, 0x49, 0x49, 0x30} // 36 6
+,{0x01, 0x71, 0x09, 0x05, 0x03} // 37 7
+,{0x36, 0x49, 0x49, 0x49, 0x36} // 38 8
+,{0x06, 0x49, 0x49, 0x29, 0x1e} // 39 9
+,{0x00, 0x36, 0x36, 0x00, 0x00} // 3a :
+,{0x00, 0x56, 0x36, 0x00, 0x00} // 3b ;
+,{0x08, 0x14, 0x22, 0x41, 0x00} // 3c <
+,{0x14, 0x14, 0x14, 0x14, 0x14} // 3d =
+,{0x00, 0x41, 0x22, 0x14, 0x08} // 3e >
+,{0x02, 0x01, 0x51, 0x09, 0x06} // 3f ?
+,{0x32, 0x49, 0x79, 0x41, 0x3e} // 40 @
+,{0x7e, 0x11, 0x11, 0x11, 0x7e} // 41 A
+,{0x7f, 0x49, 0x49, 0x49, 0x36} // 42 B
+,{0x3e, 0x41, 0x41, 0x41, 0x22} // 43 C
+,{0x7f, 0x41, 0x41, 0x22, 0x1c} // 44 D
+,{0x7f, 0x49, 0x49, 0x49, 0x41} // 45 E
+,{0x7f, 0x09, 0x09, 0x09, 0x01} // 46 F
+,{0x3e, 0x41, 0x49, 0x49, 0x7a} // 47 G
+,{0x7f, 0x08, 0x08, 0x08, 0x7f} // 48 H
+,{0x00, 0x41, 0x7f, 0x41, 0x00} // 49 I
+,{0x20, 0x40, 0x41, 0x3f, 0x01} // 4a J
+,{0x7f, 0x08, 0x14, 0x22, 0x41} // 4b K
+,{0x7f, 0x40, 0x40, 0x40, 0x40} // 4c L
+,{0x7f, 0x02, 0x0c, 0x02, 0x7f} // 4d M
+,{0x7f, 0x04, 0x08, 0x10, 0x7f} // 4e N
+,{0x3e, 0x41, 0x41, 0x41, 0x3e} // 4f O
+,{0x7f, 0x09, 0x09, 0x09, 0x06} // 50 P
+,{0x3e, 0x41, 0x51, 0x21, 0x5e} // 51 Q
+,{0x7f, 0x09, 0x19, 0x29, 0x46} // 52 R
+,{0x46, 0x49, 0x49, 0x49, 0x31} // 53 S
+,{0x01, 0x01, 0x7f, 0x01, 0x01} // 54 T
+,{0x3f, 0x40, 0x40, 0x40, 0x3f} // 55 U
+,{0x1f, 0x20, 0x40, 0x20, 0x1f} // 56 V
+,{0x3f, 0x40, 0x38, 0x40, 0x3f} // 57 W
+,{0x63, 0x14, 0x08, 0x14, 0x63} // 58 X
+,{0x07, 0x08, 0x70, 0x08, 0x07} // 59 Y
+,{0x61, 0x51, 0x49, 0x45, 0x43} // 5a Z
+,{0x00, 0x7f, 0x41, 0x41, 0x00} // 5b [
+,{0x02, 0x04, 0x08, 0x10, 0x20} // 5c ¥
+,{0x00, 0x41, 0x41, 0x7f, 0x00} // 5d ]
+,{0x04, 0x02, 0x01, 0x02, 0x04} // 5e ^
+,{0x40, 0x40, 0x40, 0x40, 0x40} // 5f _
+,{0x00, 0x01, 0x02, 0x04, 0x00} // 60 `
+,{0x20, 0x54, 0x54, 0x54, 0x78} // 61 a
+,{0x7f, 0x48, 0x44, 0x44, 0x38} // 62 b
+,{0x38, 0x44, 0x44, 0x44, 0x20} // 63 c
+,{0x38, 0x44, 0x44, 0x48, 0x7f} // 64 d
+,{0x38, 0x54, 0x54, 0x54, 0x18} // 65 e
+,{0x08, 0x7e, 0x09, 0x01, 0x02} // 66 f
+,{0x0c, 0x52, 0x52, 0x52, 0x3e} // 67 g
+,{0x7f, 0x08, 0x04, 0x04, 0x78} // 68 h
+,{0x00, 0x44, 0x7d, 0x40, 0x00} // 69 i
+,{0x20, 0x40, 0x44, 0x3d, 0x00} // 6a j
+,{0x7f, 0x10, 0x28, 0x44, 0x00} // 6b k
+,{0x00, 0x41, 0x7f, 0x40, 0x00} // 6c l
+,{0x7c, 0x04, 0x18, 0x04, 0x78} // 6d m
+,{0x7c, 0x08, 0x04, 0x04, 0x78} // 6e n
+,{0x38, 0x44, 0x44, 0x44, 0x38} // 6f o
+,{0x7c, 0x14, 0x14, 0x14, 0x08} // 70 p
+,{0x08, 0x14, 0x14, 0x18, 0x7c} // 71 q
+,{0x7c, 0x08, 0x04, 0x04, 0x08} // 72 r
+,{0x48, 0x54, 0x54, 0x54, 0x20} // 73 s
+,{0x04, 0x3f, 0x44, 0x40, 0x20} // 74 t
+,{0x3c, 0x40, 0x40, 0x20, 0x7c} // 75 u
+,{0x1c, 0x20, 0x40, 0x20, 0x1c} // 76 v
+,{0x3c, 0x40, 0x30, 0x40, 0x3c} // 77 w
+,{0x44, 0x28, 0x10, 0x28, 0x44} // 78 x
+,{0x0c, 0x50, 0x50, 0x50, 0x3c} // 79 y
+,{0x44, 0x64, 0x54, 0x4c, 0x44} // 7a z
+,{0x00, 0x08, 0x36, 0x41, 0x00} // 7b {
+,{0x00, 0x00, 0x7f, 0x00, 0x00} // 7c |
+,{0x00, 0x41, 0x36, 0x08, 0x00} // 7d }
+,{0x10, 0x08, 0x08, 0x10, 0x08} // 7e ~
+,{0x00, 0x06, 0x09, 0x09, 0x06} // 7f Deg Symbol
+};
+
+#endif /*PCD8544_H_*/
